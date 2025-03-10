@@ -43,18 +43,22 @@ def inspect_tfrecord(tfrecord_file):
 
 def parse_example(serialized_record):
     """Parse an Example record with proper feature specifications."""
-    # First try to parse without language instruction
-    feature_description = {
-        'steps/is_first': tf.io.FixedLenFeature([], tf.int64, default_value=0),
-        'steps/is_last': tf.io.FixedLenFeature([], tf.int64, default_value=0),
-        'steps/action': tf.io.FixedLenFeature([], tf.string, default_value=''),
-        'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
-        'steps/is_terminal': tf.io.FixedLenFeature([], tf.int64, default_value=0),
-        'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=''),
-        'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value='')
-    }
-
     try:
+        # Parse raw example first to get feature types
+        raw_example = tf.train.Example()
+        raw_example.ParseFromString(serialized_record.numpy())
+        
+        # Define feature description based on actual data format
+        feature_description = {}
+        for key, feature in raw_example.features.feature.items():
+            if key == 'steps/is_first' or key == 'steps/is_last' or key == 'steps/is_terminal':
+                feature_description[key] = tf.io.FixedLenFeature([], tf.int64, default_value=0)
+            elif key == 'steps/reward':
+                feature_description[key] = tf.io.FixedLenFeature([], tf.float32, default_value=0.0)
+            else:
+                feature_description[key] = tf.io.FixedLenFeature([], tf.string, default_value='')
+        
+        # Parse example with correct feature description
         example = tf.io.parse_single_example(serialized_record, feature_description)
         return example
     except Exception as e:
@@ -71,21 +75,21 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     dataset = LeRobotDataset.create(
         repo_id=REPO_NAME,
         robot_type="drone",
-        fps=10,  # Adjust based on the actual frame rate of the dataset
+        fps=10,
         features={
             "image": {
                 "dtype": "image",
-                "shape": (256, 256, 3),  # Adjust based on the actual image dimensions
+                "shape": (256, 256, 3),
                 "names": ["height", "width", "channel"],
             },
             "state": {
                 "dtype": "float32",
-                "shape": (12,),  # Adjust based on the drone state dimensions
+                "shape": (12,),
                 "names": ["state"],
             },
             "action": {
                 "dtype": "float32",
-                "shape": (4,),  # Typical drone control (roll, pitch, yaw, throttle)
+                "shape": (4,),
                 "names": ["action"],
             },
         },
@@ -106,14 +110,11 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     
     print(f"Found {len(tfrecord_files)} TFRecord files.")
     
-    # Inspect the first TFRecord file to understand its structure
-    print("\nInspecting first TFRecord file...")
-    available_features = inspect_tfrecord(tfrecord_files[0])
-    
     # Process each TFRecord file separately to handle truncation errors
     episode_count = 0
     error_count = 0
     total_steps = 0
+    current_episode_frames = []
     
     for tfrecord_file in tfrecord_files:
         try:
@@ -128,44 +129,67 @@ def main(data_dir: str, *, push_to_hub: bool = False):
                         error_count += 1
                         continue
                     
-                    # Parse the observation tensors
-                    observation_state = tf.io.parse_tensor(example['steps/observation/state'], out_type=tf.float32)
-                    observation_image = tf.io.parse_tensor(example['steps/observation/image'], out_type=tf.float32)
-                    
-                    # Parse action if available
-                    if example['steps/action'] != b'':
-                        action = tf.io.parse_tensor(example['steps/action'], out_type=tf.float32)
-                    else:
-                        action = tf.zeros((4,), dtype=tf.float32)
-                    
-                    # Add frame to dataset
-                    dataset.add_frame(
-                        {
+                    try:
+                        # Parse the observation tensors
+                        observation_state = tf.io.parse_tensor(example['steps/observation/state'], out_type=tf.float32)
+                        observation_image = tf.io.parse_tensor(example['steps/observation/image'], out_type=tf.float32)
+                        
+                        # Parse action if available
+                        if example['steps/action'] != b'':
+                            action = tf.io.parse_tensor(example['steps/action'], out_type=tf.float32)
+                        else:
+                            action = tf.zeros((4,), dtype=tf.float32)
+                        
+                        # Create frame data
+                        frame_data = {
                             "image": observation_image.numpy(),
                             "state": observation_state.numpy(),
                             "action": action.numpy(),
                         }
-                    )
-                    
-                    # If this is the last step in an episode, save it
-                    if example['steps/is_last']:
-                        instruction = f"Drone navigation task {episode_count}"
-                        dataset.save_episode(task=instruction)
-                        episode_count += 1
                         
-                        if episode_count % 10 == 0:
-                            print(f"Progress: Processed {episode_count} episodes ({error_count} errors)")
-                    
-                    total_steps += 1
+                        # Add frame to current episode
+                        current_episode_frames.append(frame_data)
+                        
+                        # If this is the last step in an episode, save it
+                        if example['steps/is_last']:
+                            # Add all frames from the episode
+                            for frame in current_episode_frames:
+                                dataset.add_frame(frame)
+                            
+                            # Get instruction if available, otherwise use default
+                            try:
+                                instruction = example['steps/language_instruction'].numpy().decode('utf-8')
+                            except:
+                                instruction = f"Drone navigation task {episode_count}"
+                            
+                            # Save episode
+                            dataset.save_episode(task=instruction)
+                            episode_count += 1
+                            
+                            # Clear current episode frames
+                            current_episode_frames = []
+                            
+                            if episode_count % 10 == 0:
+                                print(f"Progress: Processed {episode_count} episodes ({error_count} errors)")
+                        
+                        total_steps += 1
+                        
+                    except Exception as e:
+                        print(f"Error processing tensors: {str(e)}")
+                        error_count += 1
+                        current_episode_frames = []  # Reset on error
+                        continue
                     
                 except Exception as e:
-                    print(f"Error processing step in file {tfrecord_file}: {str(e)}")
+                    print(f"Error processing example: {str(e)}")
                     error_count += 1
+                    current_episode_frames = []  # Reset on error
                     continue
                     
         except Exception as e:
             print(f"Error processing file {tfrecord_file}: {str(e)}")
             error_count += 1
+            current_episode_frames = []  # Reset on error
             continue
 
     print(f"\nFinal Statistics:")
@@ -173,18 +197,26 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     print(f"Total steps processed: {total_steps}")
     print(f"Total errors encountered: {error_count}")
     
-    # Consolidate the dataset
-    dataset.consolidate(run_compute_stats=True)
+    if episode_count == 0:
+        print("No episodes were processed successfully. Dataset creation failed.")
+        return
+    
+    try:
+        # Consolidate the dataset
+        print("Consolidating dataset...")
+        dataset.consolidate(run_compute_stats=True)
 
-    # Optionally push to the Hugging Face Hub
-    if push_to_hub:
-        dataset.push_to_hub(
-            tags=["cognitive_drone", "drone", "rlds"],
-            private=False,
-            push_videos=True,
-            license="apache-2.0",
-        )
-
+        # Optionally push to the Hugging Face Hub
+        if push_to_hub:
+            dataset.push_to_hub(
+                tags=["cognitive_drone", "drone", "rlds"],
+                private=False,
+                push_videos=True,
+                license="apache-2.0",
+            )
+    except Exception as e:
+        print(f"Error during dataset consolidation: {str(e)}")
+        return
 
 if __name__ == "__main__":
     tyro.cli(main) 
