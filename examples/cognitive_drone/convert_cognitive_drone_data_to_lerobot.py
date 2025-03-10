@@ -30,13 +30,24 @@ import tyro
 
 REPO_NAME = "cognitive_drone"  # Name of the output dataset, also used for the Hugging Face Hub
 
+def inspect_tfrecord(tfrecord_file):
+    """Inspect the structure of a TFRecord file."""
+    dataset = tf.data.TFRecordDataset([tfrecord_file])
+    for serialized_example in dataset.take(1):
+        example = tf.train.Example()
+        example.ParseFromString(serialized_example.numpy())
+        print("\nAvailable features in TFRecord:")
+        for feature_name, feature in example.features.feature.items():
+            print(f"- {feature_name}")
+        return example.features.feature.keys()
+
 def parse_example(serialized_record):
     """Parse an Example record with proper feature specifications."""
+    # First try to parse without language instruction
     feature_description = {
         'steps/is_first': tf.io.FixedLenFeature([], tf.int64, default_value=0),
         'steps/is_last': tf.io.FixedLenFeature([], tf.int64, default_value=0),
         'steps/action': tf.io.FixedLenFeature([], tf.string, default_value=''),
-        'steps/language_instruction': tf.io.FixedLenFeature([], tf.string, default_value=''),
         'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
         'steps/is_terminal': tf.io.FixedLenFeature([], tf.int64, default_value=0),
         'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=''),
@@ -95,6 +106,10 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     
     print(f"Found {len(tfrecord_files)} TFRecord files.")
     
+    # Inspect the first TFRecord file to understand its structure
+    print("\nInspecting first TFRecord file...")
+    available_features = inspect_tfrecord(tfrecord_files[0])
+    
     # Process each TFRecord file separately to handle truncation errors
     episode_count = 0
     error_count = 0
@@ -134,10 +149,7 @@ def main(data_dir: str, *, push_to_hub: bool = False):
                     
                     # If this is the last step in an episode, save it
                     if example['steps/is_last']:
-                        instruction = example['steps/language_instruction'].numpy().decode('utf-8')
-                        if not instruction:
-                            instruction = f"Drone navigation task {episode_count}"
-                        
+                        instruction = f"Drone navigation task {episode_count}"
                         dataset.save_episode(task=instruction)
                         episode_count += 1
                         
