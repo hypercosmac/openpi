@@ -55,15 +55,22 @@ def parse_example(serialized_record):
                 feature_description[key] = tf.io.FixedLenFeature([], tf.int64, default_value=0)
             elif key == 'steps/reward':
                 feature_description[key] = tf.io.FixedLenFeature([], tf.float32, default_value=0.0)
+            elif key == 'steps/language_instruction':
+                # Handle language instruction as a variable length feature
+                feature_description[key] = tf.io.VarLenFeature(tf.string)
+            elif key == 'steps/observation/state' or key == 'steps/observation/image' or key == 'steps/action':
+                # These are serialized tensors
+                feature_description[key] = tf.io.FixedLenFeature([], tf.string, default_value='')
             else:
+                # Default to string for unknown fields
                 feature_description[key] = tf.io.FixedLenFeature([], tf.string, default_value='')
         
         # Parse example with correct feature description
         example = tf.io.parse_single_example(serialized_record, feature_description)
-        return example
+        return example, feature_description
     except Exception as e:
         print(f"Error parsing example: {str(e)}")
-        return None
+        return None, None
 
 def main(data_dir: str, *, push_to_hub: bool = False):
     # Clean up any existing dataset in the output directory
@@ -115,6 +122,7 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     error_count = 0
     total_steps = 0
     current_episode_frames = []
+    feature_desc = None
     
     for tfrecord_file in tfrecord_files:
         try:
@@ -124,7 +132,12 @@ def main(data_dir: str, *, push_to_hub: bool = False):
             for serialized_example in file_dataset:
                 try:
                     # Parse the example
-                    example = parse_example(serialized_example)
+                    if feature_desc is None:
+                        example, feature_desc = parse_example(serialized_example)
+                    else:
+                        # Reuse feature description for efficiency
+                        example = tf.io.parse_single_example(serialized_example, feature_desc)
+                        
                     if example is None:
                         error_count += 1
                         continue
@@ -158,7 +171,15 @@ def main(data_dir: str, *, push_to_hub: bool = False):
                             
                             # Get instruction if available, otherwise use default
                             try:
-                                instruction = example['steps/language_instruction'].numpy().decode('utf-8')
+                                instruction_tensor = example['steps/language_instruction']
+                                if isinstance(instruction_tensor, tf.sparse.SparseTensor):
+                                    instructions = tf.sparse.to_dense(instruction_tensor, default_value=b"")
+                                    if instructions.shape[0] > 0 and instructions[0] != b"":
+                                        instruction = instructions[0].numpy().decode('utf-8')
+                                    else:
+                                        instruction = f"Drone navigation task {episode_count}"
+                                else:
+                                    instruction = instruction_tensor.numpy().decode('utf-8')
                             except:
                                 instruction = f"Drone navigation task {episode_count}"
                             
