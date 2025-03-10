@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  cognitive_drone:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./:/app
+      - ${LEROBOT_HOME:-~/.cache/lerobot}:/root/.cache/lerobot
+    environment:
+      - PYTHONPATH=/app
+      - DATA_DIR=/data
+    ports:
+      - "8000:8000"  # For model server
+    command: >
+      bash -c "
+        python -m openpi.training.run --config-path /app/training_config.yaml --data.repo_id cognitive_drone
+      "
+
+  model_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./:/app
+      - ${LEROBOT_HOME:-~/.cache/lerobot}:/root/.cache/lerobot
+    ports:
+      - "8000:8000"
+    command: >
+      bash -c "
+        python -m openpi.server.run --model-path /app/model_path
+      "
+
+  eval:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./:/app
+      - ${LEROBOT_HOME:-~/.cache/lerobot}:/root/.cache/lerobot
+    depends_on:
+      - model_server
+    command: >
+      bash -c "
+        sleep 5 && uv run main.py --host model_server
+      " 

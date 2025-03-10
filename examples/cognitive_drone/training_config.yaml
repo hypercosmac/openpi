@@ -1,0 +1,38 @@
+# Training configuration for π0 with Cognitive Drone dataset
+
+# Model configuration
+model:
+  name: pi0
+  vision_backbone: vit-b-16
+  action_horizon: 10
+  enable_fsdp: true
+  
+# Data configuration
+data:
+  repo_id: cognitive_drone
+  prompt_from_task: true
+  action_sequence_keys: 
+    - action
+
+# Training parameters
+training:
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  num_epochs: 10
+  gradient_accumulation_steps: 4
+  warmup_ratio: 0.1
+  
+# Checkpointing
+checkpoint:
+  save_interval_steps: 500
+  load_checkpoint: null
+
+# Evaluation
+evaluation:
+  eval_interval_steps: 250
+  eval_steps: 100
+  
+# Logging
+logging:
+  log_interval_steps: 10 
