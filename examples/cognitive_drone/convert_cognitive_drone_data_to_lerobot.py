@@ -91,11 +91,7 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     )
 
     # Find all TFRecord files in the specified directory
-    if os.path.isdir(os.path.join(data_dir, "data", "rlds", "train")):
-        tfrecord_pattern = os.path.join(data_dir, "data", "rlds", "train", "*.tfrecord-*")
-    else:
-        tfrecord_pattern = os.path.join(data_dir, "*.tfrecord-*")
-    
+    tfrecord_pattern = os.path.join(data_dir, "*.tfrecord-*")
     tfrecord_files = glob.glob(tfrecord_pattern)
     
     if not tfrecord_files:
@@ -106,10 +102,10 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     # Create a dataset from the TFRecord files
     raw_dataset = tf.data.TFRecordDataset(tfrecord_files)
     
-    episode_count = 0
-    for serialized_example in raw_dataset:
+    # Process only the first TFRecord file
+    for serialized_example in raw_dataset.take(1):  # Change here to process only one example
         try:
-            # Process each episode
+            # Process the episode
             steps = parse_episode(serialized_example)
             
             # Extract steps data
@@ -131,24 +127,19 @@ def main(data_dir: str, *, push_to_hub: bool = False):
                     }
                 )
             
-            # Save each episode with its associated task/instruction
+            # Save the episode with its associated task/instruction
             if steps['language_instruction']:
                 instruction = steps['language_instruction'][0].decode()
             else:
-                instruction = f"Drone navigation task {episode_count}"
+                instruction = "Drone navigation task"
             
             dataset.save_episode(task=instruction)
-            episode_count += 1
+            print("Processed one episode successfully.")
             
-            if episode_count % 10 == 0:
-                print(f"Processed {episode_count} episodes")
-                
         except Exception as e:
             print(f"Error processing episode: {e}")
             continue
 
-    print(f"Successfully processed {episode_count} episodes.")
-    
     # Consolidate the dataset
     dataset.consolidate(run_compute_stats=True)
 
