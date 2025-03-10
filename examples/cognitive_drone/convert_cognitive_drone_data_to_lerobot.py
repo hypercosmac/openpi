@@ -115,7 +115,7 @@ def parse_sequence_example(serialized_record):
 def parse_example(serialized_record):
     """Parse a standard Example record with proper feature specifications."""
     try:
-        # Define feature description for Example format
+        # Define required features
         feature_description = {
             'steps/is_first': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/is_last': tf.io.FixedLenFeature([], tf.int64, default_value=0),
@@ -123,18 +123,12 @@ def parse_example(serialized_record):
             'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
             'steps/action': tf.io.FixedLenFeature([], tf.string, default_value=''),
             'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=''),
-            'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value='')
+            'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value=''),
+            'steps/language_instruction': tf.io.FixedLenFeature([], tf.string, default_value='')
         }
         
-        # Try to parse language instruction if available
-        try:
-            feature_description['steps/language_instruction'] = tf.io.FixedLenFeature([], tf.string, default_value='')
-        except:
-            pass
-        
         # Parse example
-        example = tf.io.parse_single_example(serialized_record, feature_description)
-        return example
+        return tf.io.parse_single_example(serialized_record, feature_description)
     except Exception as e:
         print(f"Error parsing example: {str(e)}")
         return None
@@ -184,11 +178,6 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     
     print(f"Found {len(tfrecord_files)} TFRecord files.")
     
-    # Inspect the first TFRecord file to determine the format
-    print("Inspecting first TFRecord file...")
-    record_type, _, _ = inspect_tfrecord(tfrecord_files[0])
-    print(f"Detected record type: {record_type}")
-    
     # Process each TFRecord file
     episode_count = 0
     error_count = 0
@@ -205,195 +194,94 @@ def main(data_dir: str, *, push_to_hub: bool = False):
             
             for example_idx, serialized_example in enumerate(file_dataset):
                 try:
-                    # Parse based on detected format
-                    if record_type == "example":
-                        # Parse as Example
-                        example = parse_example(serialized_example)
-                        if example is None:
-                            error_count += 1
-                            continue
-                        
-                        try:
-                            # Process Example format (one step per example)
-                            is_first = example['steps/is_first'].numpy()
-                            is_last = example['steps/is_last'].numpy()
-                            is_terminal = example['steps/is_terminal'].numpy()
-                            
-                            # Parse observation state
-                            observation_state = tf.io.parse_tensor(
-                                example['steps/observation/state'], out_type=tf.float32
-                            )
-                            
-                            # Parse observation image
-                            observation_image = tf.io.parse_tensor(
-                                example['steps/observation/image'], out_type=tf.float32
-                            )
-                            
-                            # Parse action
-                            try:
-                                action_data = example['steps/action']
-                                if action_data != b'':
-                                    action = tf.io.parse_tensor(action_data, out_type=tf.float32)
-                                else:
-                                    action = tf.zeros((4,), dtype=tf.float32)
-                            except:
-                                action = tf.zeros((4,), dtype=tf.float32)
-                            
-                            # Get language instruction if available
-                            if is_first and 'steps/language_instruction' in example:
-                                try:
-                                    language_instruction = example['steps/language_instruction'].numpy().decode('utf-8')
-                                    if language_instruction:
-                                        current_episode_instruction = language_instruction
-                                except:
-                                    pass
-                            
-                            # Validate tensor shapes before adding to dataset
-                            if (observation_image.shape != (256, 256, 3) or
-                                observation_state.shape[0] < 12 or
-                                action.shape[0] < 4):
-                                print(f"Warning: Unexpected tensor shapes - image: {observation_image.shape}, "
-                                      f"state: {observation_state.shape}, action: {action.shape}")
-                                continue
-                            
-                            # Create frame data
-                            frame_data = {
-                                "image": observation_image.numpy(),
-                                "state": observation_state.numpy()[:12],  # Ensure consistent state size
-                                "action": action.numpy()[:4],             # Ensure consistent action size
-                            }
-                            
-                            # Add frame to current episode
-                            current_episode_frames.append(frame_data)
-                            total_steps += 1
-                            
-                            # Handle episode completion
-                            if is_last or is_terminal:
-                                if len(current_episode_frames) > 0:
-                                    # Add all frames to the dataset
-                                    for frame in current_episode_frames:
-                                        dataset.add_frame(frame)
-                                    
-                                    # Use stored instruction or default
-                                    if current_episode_instruction is None or current_episode_instruction == "":
-                                        instruction = f"Drone navigation task {episode_count}"
-                                    else:
-                                        instruction = current_episode_instruction
-                                    
-                                    # Save episode
-                                    dataset.save_episode(task=instruction)
-                                    episode_count += 1
-                                    
-                                    if episode_count % 5 == 0:
-                                        print(f"Progress: Processed {episode_count} episodes, {total_steps} steps")
-                                
-                                # Reset for next episode
-                                current_episode_frames = []
-                                current_episode_instruction = None
-                        
-                        except Exception as e:
-                            print(f"Error processing example {example_idx}: {str(e)}")
-                            error_count += 1
-                            # Don't reset frames to allow for recovery from minor errors
-                    
-                    elif record_type == "sequence_example":
-                        # Parse as SequenceExample
-                        context, sequence_data = parse_sequence_example(serialized_example)
-                        
-                        if context is None or sequence_data is None:
-                            error_count += 1
-                            continue
-                        
-                        # Process all steps in the sequence
-                        sequence_length = tf.shape(sequence_data["steps/is_first"])[0].numpy()
-                        
-                        for step_idx in range(sequence_length):
-                            try:
-                                # Get step data
-                                is_first = sequence_data["steps/is_first"][step_idx].numpy()
-                                is_last = sequence_data["steps/is_last"][step_idx].numpy()
-                                is_terminal = sequence_data["steps/is_terminal"][step_idx].numpy()
-                                
-                                # Parse observation state
-                                observation_state = tf.io.parse_tensor(
-                                    sequence_data["steps/observation/state"][step_idx], out_type=tf.float32
-                                )
-                                
-                                # Parse observation image
-                                observation_image = tf.io.parse_tensor(
-                                    sequence_data["steps/observation/image"][step_idx], out_type=tf.float32
-                                )
-                                
-                                # Parse action
-                                try:
-                                    action_data = sequence_data["steps/action"][step_idx]
-                                    if action_data != b'':
-                                        action = tf.io.parse_tensor(action_data, out_type=tf.float32)
-                                    else:
-                                        action = tf.zeros((4,), dtype=tf.float32)
-                                except:
-                                    action = tf.zeros((4,), dtype=tf.float32)
-                                
-                                # Get language instruction if available
-                                if "steps/language_instruction" in sequence_data and is_first:
-                                    try:
-                                        language_instruction = sequence_data["steps/language_instruction"][step_idx].numpy().decode('utf-8')
-                                        if language_instruction:
-                                            current_episode_instruction = language_instruction
-                                    except:
-                                        pass
-                                
-                                # Validate tensor shapes before adding to dataset
-                                if (observation_image.shape != (256, 256, 3) or
-                                    observation_state.shape[0] < 12 or
-                                    action.shape[0] < 4):
-                                    print(f"Warning: Unexpected tensor shapes - image: {observation_image.shape}, "
-                                          f"state: {observation_state.shape}, action: {action.shape}")
-                                    continue
-                                
-                                # Create frame data
-                                frame_data = {
-                                    "image": observation_image.numpy(),
-                                    "state": observation_state.numpy()[:12],  # Ensure consistent state size
-                                    "action": action.numpy()[:4],             # Ensure consistent action size
-                                }
-                                
-                                # Add frame to current episode
-                                current_episode_frames.append(frame_data)
-                                total_steps += 1
-                                
-                                # Handle episode completion
-                                if is_last or is_terminal:
-                                    if len(current_episode_frames) > 0:
-                                        # Add all frames to the dataset
-                                        for frame in current_episode_frames:
-                                            dataset.add_frame(frame)
-                                        
-                                        # Use stored instruction or default
-                                        if current_episode_instruction is None or current_episode_instruction == "":
-                                            instruction = f"Drone navigation task {episode_count}"
-                                        else:
-                                            instruction = current_episode_instruction
-                                        
-                                        # Save episode
-                                        dataset.save_episode(task=instruction)
-                                        episode_count += 1
-                                        
-                                        if episode_count % 5 == 0:
-                                            print(f"Progress: Processed {episode_count} episodes, {total_steps} steps")
-                                    
-                                    # Reset for next episode
-                                    current_episode_frames = []
-                                    current_episode_instruction = None
-                                
-                            except Exception as e:
-                                print(f"Error processing step {step_idx} in example {example_idx}: {str(e)}")
-                                error_count += 1
-                                # Don't reset episode frames here to allow partial episodes
-                    else:
-                        print(f"Unknown record type: {record_type}, skipping example")
+                    # Parse example
+                    example = parse_example(serialized_example)
+                    if example is None:
                         error_count += 1
                         continue
+                    
+                    try:
+                        # Process Example format (one step per example)
+                        is_first = example['steps/is_first'].numpy()
+                        is_last = example['steps/is_last'].numpy()
+                        is_terminal = example['steps/is_terminal'].numpy()
+                        
+                        # Parse observation state
+                        observation_state = tf.io.parse_tensor(
+                            example['steps/observation/state'], out_type=tf.float32
+                        )
+                        
+                        # Parse observation image
+                        observation_image = tf.io.parse_tensor(
+                            example['steps/observation/image'], out_type=tf.float32
+                        )
+                        
+                        # Parse action
+                        try:
+                            action_data = example['steps/action']
+                            if action_data != b'':
+                                action = tf.io.parse_tensor(action_data, out_type=tf.float32)
+                            else:
+                                action = tf.zeros((4,), dtype=tf.float32)
+                        except:
+                            action = tf.zeros((4,), dtype=tf.float32)
+                        
+                        # Get language instruction if available
+                        if is_first:
+                            try:
+                                language_instruction = example['steps/language_instruction'].numpy().decode('utf-8')
+                                if language_instruction and language_instruction != '':
+                                    current_episode_instruction = language_instruction
+                            except:
+                                pass
+                        
+                        # Validate tensor shapes before adding to dataset
+                        if (observation_image.shape != (256, 256, 3) or
+                            observation_state.shape[0] < 12 or
+                            action.shape[0] < 4):
+                            print(f"Warning: Unexpected tensor shapes - image: {observation_image.shape}, "
+                                  f"state: {observation_state.shape}, action: {action.shape}")
+                            continue
+                        
+                        # Create frame data
+                        frame_data = {
+                            "image": observation_image.numpy(),
+                            "state": observation_state.numpy()[:12],  # Ensure consistent state size
+                            "action": action.numpy()[:4],             # Ensure consistent action size
+                        }
+                        
+                        # Add frame to current episode
+                        current_episode_frames.append(frame_data)
+                        total_steps += 1
+                        
+                        # Handle episode completion
+                        if is_last or is_terminal:
+                            if len(current_episode_frames) > 0:
+                                # Add all frames to the dataset
+                                for frame in current_episode_frames:
+                                    dataset.add_frame(frame)
+                                
+                                # Use stored instruction or default
+                                if current_episode_instruction is None or current_episode_instruction == "":
+                                    instruction = f"Drone navigation task {episode_count}"
+                                else:
+                                    instruction = current_episode_instruction
+                                
+                                # Save episode
+                                dataset.save_episode(task=instruction)
+                                episode_count += 1
+                                
+                                if episode_count % 5 == 0:
+                                    print(f"Progress: Processed {episode_count} episodes, {total_steps} steps")
+                            
+                            # Reset for next episode
+                            current_episode_frames = []
+                            current_episode_instruction = None
+                    
+                    except Exception as e:
+                        print(f"Error processing example {example_idx}: {str(e)}")
+                        error_count += 1
+                        # Don't reset frames to allow for recovery from minor errors
                         
                 except Exception as e:
                     print(f"Error processing example {example_idx}: {str(e)}")
