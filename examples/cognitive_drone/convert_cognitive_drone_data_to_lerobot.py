@@ -115,16 +115,16 @@ def parse_sequence_example(serialized_record):
 def parse_example(serialized_record):
     """Parse a standard Example record with proper feature specifications."""
     try:
-        # Define required features
+        # Define required features with proper bytes literals for string defaults
         feature_description = {
             'steps/is_first': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/is_last': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/is_terminal': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
-            'steps/action': tf.io.FixedLenFeature([], tf.string, default_value=''),
-            'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=''),
-            'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value=''),
-            'steps/language_instruction': tf.io.FixedLenFeature([], tf.string, default_value='')
+            'steps/action': tf.io.FixedLenFeature([], tf.string, default_value=b''),
+            'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=b''),
+            'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value=b''),
+            'steps/language_instruction': tf.io.FixedLenFeature([], tf.string, default_value=b'')
         }
         
         # Parse example
