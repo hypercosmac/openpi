@@ -20,7 +20,8 @@ markdown==3.5.2
 markupsafe==2.1.5
 ml-dtypes==0.2.0
 numpy==1.26.3
-openpi-client==0.1.0
+# Replace with local installation
+-e ../..
 opt-einsum==3.3.0
 packaging==23.2
 pillow==10.2.0
