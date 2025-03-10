@@ -20,15 +20,41 @@ The resulting dataset will get saved to the $LEROBOT_HOME directory.
 
 import shutil
 import os
+import glob
 from pathlib import Path
 
 from lerobot.common.datasets.lerobot_dataset import LEROBOT_HOME
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 import tensorflow as tf
-import tensorflow_datasets as tfds
 import tyro
 
 REPO_NAME = "cognitive_drone"  # Name of the output dataset, also used for the Hugging Face Hub
+
+# Define the feature description for parsing TFRecord files
+# You may need to adjust this based on the actual structure of your data
+def get_feature_description():
+    return {
+        'steps': tf.io.FixedLenFeature([], tf.string),
+    }
+
+def parse_episode(serialized_example):
+    # Parse the TFRecord example
+    example = tf.io.parse_single_example(serialized_example, get_feature_description())
+    
+    # Parse the nested steps feature (adjust as needed)
+    steps_feature = {
+        'observation': tf.io.FixedLenFeature([], tf.string),
+        'action': tf.io.FixedLenFeature([], tf.string),
+        'language_instruction': tf.io.FixedLenFeature([], tf.string, default_value=b''),
+    }
+    
+    # The steps tensor is a serialized sequence of step examples
+    steps = tf.io.parse_sequence_example(
+        example['steps'],
+        sequence_features=steps_feature
+    )
+    
+    return steps
 
 def main(data_dir: str, *, push_to_hub: bool = False):
     # Clean up any existing dataset in the output directory
@@ -36,9 +62,9 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     if output_path.exists():
         shutil.rmtree(output_path)
     
-    print(f"Output will be saved to: {output_path}")
-    
     # Create LeRobot dataset, define features to store
+    # Based on the CognitiveDrone dataset structure
+    # OpenPi assumes that proprio is stored in `state` and actions in `action`
     dataset = LeRobotDataset.create(
         repo_id=REPO_NAME,
         robot_type="drone",
@@ -64,36 +90,65 @@ def main(data_dir: str, *, push_to_hub: bool = False):
         image_writer_processes=5,
     )
 
-    # Load the CognitiveDrone dataset directly using tfds.load()
-    try:
-        raw_dataset = tfds.load("cognitive_drone", data_dir=data_dir, split="train")
-        print(f"Loaded {len(raw_dataset)} episodes from the dataset.")
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        return
-
-    # Process each episode in the dataset
-    for episode in raw_dataset:
+    # Find all TFRecord files in the specified directory
+    if os.path.isdir(os.path.join(data_dir, "data", "rlds", "train")):
+        tfrecord_pattern = os.path.join(data_dir, "data", "rlds", "train", "*.tfrecord-*")
+    else:
+        tfrecord_pattern = os.path.join(data_dir, "*.tfrecord-*")
+    
+    tfrecord_files = glob.glob(tfrecord_pattern)
+    
+    if not tfrecord_files:
+        raise ValueError(f"No TFRecord files found in {tfrecord_pattern}")
+    
+    print(f"Found {len(tfrecord_files)} TFRecord files.")
+    
+    # Create a dataset from the TFRecord files
+    raw_dataset = tf.data.TFRecordDataset(tfrecord_files)
+    
+    episode_count = 0
+    for serialized_example in raw_dataset:
         try:
-            # Assuming episode contains the necessary fields
-            for step in episode["steps"].as_numpy_iterator():
+            # Process each episode
+            steps = parse_episode(serialized_example)
+            
+            # Extract steps data
+            for i in range(len(steps['observation'])):
+                # Add each frame to the dataset
+                # Adjust the keys and parsing based on the actual structure of your data
+                observation = tf.io.parse_tensor(steps['observation'][i], out_type=tf.float32)
+                action = tf.io.parse_tensor(steps['action'][i], out_type=tf.float32)
+                
+                # Assuming observation contains both image and state
+                image = observation[:256*256*3].reshape((256, 256, 3))
+                state = observation[256*256*3:256*256*3+12]
+                
                 dataset.add_frame(
                     {
-                        "image": step["observation"]["image"],
-                        "state": step["observation"]["state"],
-                        "action": step["action"],
+                        "image": image.numpy(),
+                        "state": state.numpy(),
+                        "action": action.numpy(),
                     }
                 )
             
-            # Save the episode with its associated task/instruction
-            instruction = step["language_instruction"].decode() if "language_instruction" in step else "Drone navigation task"
-            dataset.save_episode(task=instruction)
-            print("Processed one episode successfully.")
+            # Save each episode with its associated task/instruction
+            if steps['language_instruction']:
+                instruction = steps['language_instruction'][0].decode()
+            else:
+                instruction = f"Drone navigation task {episode_count}"
             
+            dataset.save_episode(task=instruction)
+            episode_count += 1
+            
+            if episode_count % 10 == 0:
+                print(f"Processed {episode_count} episodes")
+                
         except Exception as e:
             print(f"Error processing episode: {e}")
             continue
 
+    print(f"Successfully processed {episode_count} episodes.")
+    
     # Consolidate the dataset
     dataset.consolidate(run_compute_stats=True)
 
