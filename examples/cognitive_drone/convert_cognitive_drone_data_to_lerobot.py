@@ -30,31 +30,31 @@ import tyro
 
 REPO_NAME = "cognitive_drone"  # Name of the output dataset, also used for the Hugging Face Hub
 
-# Define the feature description for parsing TFRecord files
-# You may need to adjust this based on the actual structure of your data
-def get_feature_description():
-    return {
-        'steps': tf.io.FixedLenFeature([], tf.string),
+def parse_sequence(serialized_record):
+    """Parse a SequenceExample record with proper feature specifications."""
+    context_features = {
+        # Add any context features if they exist in your data
+    }
+    
+    sequence_features = {
+        "steps/is_last": tf.io.FixedLenSequenceFeature([], tf.int64),
+        "steps/language_instruction": tf.io.FixedLenSequenceFeature([], tf.string),
+        "steps/observation": tf.io.FixedLenSequenceFeature([], tf.string),
+        "steps/action": tf.io.FixedLenSequenceFeature([], tf.string),
     }
 
-def parse_episode(serialized_example):
-    # Parse the TFRecord example
-    example = tf.io.parse_single_example(serialized_example, get_feature_description())
-    
-    # Parse the nested steps feature (adjust as needed)
-    steps_feature = {
-        'observation': tf.io.FixedLenFeature([], tf.string),
-        'action': tf.io.FixedLenFeature([], tf.string),
-        'language_instruction': tf.io.FixedLenFeature([], tf.string, default_value=b''),
-    }
-    
-    # The steps tensor is a serialized sequence of step examples
-    steps = tf.io.parse_sequence_example(
-        example['steps'],
-        sequence_features=steps_feature
-    )
-    
-    return steps
+    try:
+        context_data, seq_data = tf.io.parse_single_sequence_example(
+            serialized_record,
+            context_features=context_features,
+            sequence_features=sequence_features
+        )
+        return context_data, seq_data
+    except Exception as e:
+        print(f"Error parsing sequence: {e}")
+        # Print the raw record for debugging
+        print("Raw record:", serialized_record.numpy())
+        raise
 
 def main(data_dir: str, *, push_to_hub: bool = False):
     # Clean up any existing dataset in the output directory
@@ -63,8 +63,6 @@ def main(data_dir: str, *, push_to_hub: bool = False):
         shutil.rmtree(output_path)
     
     # Create LeRobot dataset, define features to store
-    # Based on the CognitiveDrone dataset structure
-    # OpenPi assumes that proprio is stored in `state` and actions in `action`
     dataset = LeRobotDataset.create(
         repo_id=REPO_NAME,
         robot_type="drone",
@@ -77,7 +75,7 @@ def main(data_dir: str, *, push_to_hub: bool = False):
             },
             "state": {
                 "dtype": "float32",
-                "shape": (12,),  # Adjust based on the drone state dimensions (position, orientation, etc.)
+                "shape": (12,),  # Adjust based on the drone state dimensions
                 "names": ["state"],
             },
             "action": {
@@ -105,24 +103,34 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     
     # Create a dataset from the TFRecord files
     raw_dataset = tf.data.TFRecordDataset(tfrecord_files)
+    
+    # Debug: Print the first record structure
+    print("\nExamining first record structure:")
     for raw_record in raw_dataset.take(1):
-        print(raw_record)
-        # Parse with a generic feature spec that captures all keys as strings
-        example = tf.io.parse_single_example(raw_record, {"dummy": tf.io.VarLenFeature(tf.string)})
-        print("Record keys:", list(example.keys()))
+        try:
+            seq_ex = tf.train.SequenceExample.FromString(raw_record.numpy())
+            print("\nContext features:", list(seq_ex.context.feature.keys()))
+            print("Sequence features:", list(seq_ex.feature_lists.feature_list.keys()))
+        except Exception as e:
+            print(f"Error examining record structure: {e}")
+    
+    # Reset the dataset after examination
+    raw_dataset = tf.data.TFRecordDataset(tfrecord_files)
     
     episode_count = 0
     for serialized_example in raw_dataset:
         try:
-            # Process each episode
-            steps = parse_episode(serialized_example)
+            # Parse the sequence example
+            context_data, seq_data = parse_sequence(serialized_example)
             
-            # Extract steps data
-            for i in range(len(steps['observation'])):
-                # Add each frame to the dataset
-                # Adjust the keys and parsing based on the actual structure of your data
-                observation = tf.io.parse_tensor(steps['observation'][i], out_type=tf.float32)
-                action = tf.io.parse_tensor(steps['action'][i], out_type=tf.float32)
+            # Get the number of steps in this sequence
+            num_steps = len(seq_data["steps/observation"])
+            
+            # Process each step in the sequence
+            for i in range(num_steps):
+                # Parse the observation and action tensors
+                observation = tf.io.parse_tensor(seq_data["steps/observation"][i], out_type=tf.float32)
+                action = tf.io.parse_tensor(seq_data["steps/action"][i], out_type=tf.float32)
                 
                 # Assuming observation contains both image and state
                 image = observation[:256*256*3].reshape((256, 256, 3))
@@ -136,9 +144,9 @@ def main(data_dir: str, *, push_to_hub: bool = False):
                     }
                 )
             
-            # Save each episode with its associated task/instruction
-            if steps['language_instruction']:
-                instruction = steps['language_instruction'][0].decode()
+            # Get the language instruction if available
+            if seq_data["steps/language_instruction"]:
+                instruction = seq_data["steps/language_instruction"][0].decode()
             else:
                 instruction = f"Drone navigation task {episode_count}"
             
@@ -149,7 +157,7 @@ def main(data_dir: str, *, push_to_hub: bool = False):
                 print(f"Processed {episode_count} episodes")
                 
         except Exception as e:
-            print(f"Error processing episode: {e}")
+            print(f"Error processing episode {episode_count}: {e}")
             continue
 
     print(f"Successfully processed {episode_count} episodes.")
