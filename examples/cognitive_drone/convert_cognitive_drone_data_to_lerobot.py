@@ -124,11 +124,20 @@ def parse_example(serialized_record):
             'steps/action': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value=b''),
-            'steps/language_instruction': tf.io.FixedLenFeature([], tf.string, default_value=b'')
+            # Make language instruction optional using VarLenFeature
+            'steps/language_instruction': tf.io.VarLenFeature(tf.string)
         }
         
         # Parse example
-        return tf.io.parse_single_example(serialized_record, feature_description)
+        example = tf.io.parse_single_example(serialized_record, feature_description)
+        
+        # Convert sparse tensor to dense for language instruction if present
+        if isinstance(example['steps/language_instruction'], tf.sparse.SparseTensor):
+            example['steps/language_instruction'] = tf.sparse.to_dense(
+                example['steps/language_instruction'], default_value=b''
+            )[0]  # Take first value if multiple exist
+        
+        return example
     except Exception as e:
         print(f"Error parsing example: {str(e)}")
         return None
