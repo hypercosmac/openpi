@@ -106,6 +106,7 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     # Create a dataset from the TFRecord files
     raw_dataset = tf.data.TFRecordDataset(tfrecord_files)
     for raw_record in raw_dataset.take(1):
+        print(raw_record)
         # Parse with a generic feature spec that captures all keys as strings
         example = tf.io.parse_single_example(raw_record, {"dummy": tf.io.VarLenFeature(tf.string)})
         print("Record keys:", list(example.keys()))
