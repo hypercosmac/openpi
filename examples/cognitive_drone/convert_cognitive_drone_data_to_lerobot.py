@@ -36,25 +36,30 @@ def parse_sequence(serialized_record):
         # Add any context features if they exist in your data
     }
     
+    # Define sequence features with defaults for missing ones
     sequence_features = {
         "steps/is_last": tf.io.FixedLenSequenceFeature([], tf.int64),
         "steps/language_instruction": tf.io.FixedLenSequenceFeature([], tf.string),
         "steps/observation": tf.io.FixedLenSequenceFeature([], tf.string),
         "steps/action": tf.io.FixedLenSequenceFeature([], tf.string),
     }
+    
+    # Define which features can be missing
+    feature_list_dense_missing_assumed_empty = [
+        "steps/action",  # Some episodes might not have actions
+    ]
 
     try:
         context_data, seq_data = tf.io.parse_single_sequence_example(
             serialized_record,
             context_features=context_features,
-            sequence_features=sequence_features
+            sequence_features=sequence_features,
+            feature_list_dense_missing_assumed_empty=feature_list_dense_missing_assumed_empty
         )
         return context_data, seq_data
     except Exception as e:
-        print(f"Error parsing sequence: {e}")
-        # Print the raw record for debugging
-        print("Raw record:", serialized_record.numpy())
-        raise
+        print(f"Error parsing sequence: {str(e)}")
+        return None, None
 
 def main(data_dir: str, *, push_to_hub: bool = False):
     # Clean up any existing dataset in the output directory
@@ -101,7 +106,7 @@ def main(data_dir: str, *, push_to_hub: bool = False):
     
     print(f"Found {len(tfrecord_files)} TFRecord files.")
     
-    # Create a dataset from the TFRecord files
+    # Create a dataset from the TFRecord files with error handling
     raw_dataset = tf.data.TFRecordDataset(tfrecord_files)
     
     # Debug: Print the first record structure
@@ -112,37 +117,54 @@ def main(data_dir: str, *, push_to_hub: bool = False):
             print("\nContext features:", list(seq_ex.context.feature.keys()))
             print("Sequence features:", list(seq_ex.feature_lists.feature_list.keys()))
         except Exception as e:
-            print(f"Error examining record structure: {e}")
+            print(f"Error examining record structure: {str(e)}")
     
     # Reset the dataset after examination
     raw_dataset = tf.data.TFRecordDataset(tfrecord_files)
     
     episode_count = 0
+    error_count = 0
+    total_steps = 0
+    
     for serialized_example in raw_dataset:
         try:
             # Parse the sequence example
             context_data, seq_data = parse_sequence(serialized_example)
+            if seq_data is None:
+                error_count += 1
+                continue
             
             # Get the number of steps in this sequence
             num_steps = len(seq_data["steps/observation"])
+            total_steps += num_steps
             
             # Process each step in the sequence
             for i in range(num_steps):
-                # Parse the observation and action tensors
-                observation = tf.io.parse_tensor(seq_data["steps/observation"][i], out_type=tf.float32)
-                action = tf.io.parse_tensor(seq_data["steps/action"][i], out_type=tf.float32)
-                
-                # Assuming observation contains both image and state
-                image = observation[:256*256*3].reshape((256, 256, 3))
-                state = observation[256*256*3:256*256*3+12]
-                
-                dataset.add_frame(
-                    {
-                        "image": image.numpy(),
-                        "state": state.numpy(),
-                        "action": action.numpy(),
-                    }
-                )
+                try:
+                    # Parse the observation and action tensors
+                    observation = tf.io.parse_tensor(seq_data["steps/observation"][i], out_type=tf.float32)
+                    
+                    # Handle missing actions
+                    if "steps/action" in seq_data and i < len(seq_data["steps/action"]):
+                        action = tf.io.parse_tensor(seq_data["steps/action"][i], out_type=tf.float32)
+                    else:
+                        # Use zero action if missing
+                        action = tf.zeros((4,), dtype=tf.float32)
+                    
+                    # Assuming observation contains both image and state
+                    image = observation[:256*256*3].reshape((256, 256, 3))
+                    state = observation[256*256*3:256*256*3+12]
+                    
+                    dataset.add_frame(
+                        {
+                            "image": image.numpy(),
+                            "state": state.numpy(),
+                            "action": action.numpy(),
+                        }
+                    )
+                except Exception as e:
+                    print(f"Error processing step {i} in episode {episode_count}: {str(e)}")
+                    continue
             
             # Get the language instruction if available
             if seq_data["steps/language_instruction"]:
@@ -154,13 +176,17 @@ def main(data_dir: str, *, push_to_hub: bool = False):
             episode_count += 1
             
             if episode_count % 10 == 0:
-                print(f"Processed {episode_count} episodes")
+                print(f"Progress: Processed {episode_count} episodes, {total_steps} total steps, {error_count} errors")
                 
         except Exception as e:
-            print(f"Error processing episode {episode_count}: {e}")
+            print(f"Error processing episode {episode_count}: {str(e)}")
+            error_count += 1
             continue
 
-    print(f"Successfully processed {episode_count} episodes.")
+    print(f"\nFinal Statistics:")
+    print(f"Successfully processed {episode_count} episodes")
+    print(f"Total steps processed: {total_steps}")
+    print(f"Total errors encountered: {error_count}")
     
     # Consolidate the dataset
     dataset.consolidate(run_compute_stats=True)
