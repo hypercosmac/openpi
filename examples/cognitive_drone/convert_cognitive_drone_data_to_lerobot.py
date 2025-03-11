@@ -121,8 +121,8 @@ def parse_example(serialized_record):
             'steps/is_last': tf.io.VarLenFeature(tf.int64),
             'steps/is_terminal': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
-            # Expect serialized tensor for action
-            'steps/action': tf.io.FixedLenFeature([1], tf.float32, default_value=[0.0]),
+            # Change action to be a list of floats
+            'steps/action': tf.io.FixedLenFeature([4], tf.float32, default_value=[0.0, 0.0, 0.0, 0.0]),
             'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             'steps/language_instruction': tf.io.VarLenFeature(tf.string)
@@ -131,9 +131,8 @@ def parse_example(serialized_record):
         # Parse example
         example = tf.io.parse_single_example(serialized_record, feature_description)
         
-        # Convert serialized action to float tensor
-        action_serialized = example['steps/action']
-        action = tf.io.parse_tensor(action_serialized, out_type=tf.float32)
+        # Directly access the action tensor
+        action = example['steps/action']
         
         # Convert sparse tensor to dense for language instruction if present
         if isinstance(example['steps/language_instruction'], tf.sparse.SparseTensor):
