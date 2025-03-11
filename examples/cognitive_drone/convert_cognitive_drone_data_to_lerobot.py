@@ -120,7 +120,7 @@ def parse_example(serialized_record):
             'steps/is_first': tf.io.VarLenFeature(tf.int64),
             'steps/is_last': tf.io.VarLenFeature(tf.int64),
             'steps/is_terminal': tf.io.VarLenFeature(tf.int64),
-            'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
+            'steps/reward': tf.io.VarLenFeature(tf.int64),
             # Expect action to be a list of floats
             'steps/action': tf.io.VarLenFeature(tf.float32),
             'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=b''),
