@@ -121,21 +121,28 @@ def parse_example(serialized_record):
             'steps/is_last': tf.io.VarLenFeature(tf.int64),
             'steps/is_terminal': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
-            'steps/action': tf.io.FixedLenFeature([4], tf.float32, default_value=[0.0, 0.0, 0.0, 0.0]),
+            # Expect serialized tensor for action
+            'steps/action': tf.io.FixedLenFeature([1], tf.float32, default_value=[0.0]),
             'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value=b''),
-            # Make language instruction optional using VarLenFeature
             'steps/language_instruction': tf.io.VarLenFeature(tf.string)
         }
         
         # Parse example
         example = tf.io.parse_single_example(serialized_record, feature_description)
         
+        # Convert serialized action to float tensor
+        action_serialized = example['steps/action']
+        action = tf.io.parse_tensor(action_serialized, out_type=tf.float32)
+        
         # Convert sparse tensor to dense for language instruction if present
         if isinstance(example['steps/language_instruction'], tf.sparse.SparseTensor):
             example['steps/language_instruction'] = tf.sparse.to_dense(
                 example['steps/language_instruction'], default_value=b''
             )[0]  # Take first value if multiple exist
+        
+        # Add the action tensor back to the example
+        example['steps/action'] = action
         
         return example
     except Exception as e:
@@ -202,6 +209,9 @@ def main(data_dir: str, *, push_to_hub: bool = False):
             file_dataset = tf.data.TFRecordDataset([tfrecord_file], buffer_size=16*1024*1024)
             
             for example_idx, serialized_example in enumerate(file_dataset):
+                example_proto = tf.train.Example()
+                example_proto.ParseFromString(serialized_example.numpy())
+                print("Raw steps/action:", example_proto.features.feature["steps/action"])
                 try:
                     # Parse example
                     example = parse_example(serialized_example)
