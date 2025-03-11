@@ -121,8 +121,8 @@ def parse_example(serialized_record):
             'steps/is_last': tf.io.VarLenFeature(tf.int64),
             'steps/is_terminal': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
-            # Change action to be a list of floats
-            'steps/action': tf.io.FixedLenFeature([4], tf.float32, default_value=[0.0, 0.0, 0.0, 0.0]),
+            # Expect action to be a list of floats
+            'steps/action': tf.io.VarLenFeature(tf.float32),
             'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             'steps/language_instruction': tf.io.VarLenFeature(tf.string)
