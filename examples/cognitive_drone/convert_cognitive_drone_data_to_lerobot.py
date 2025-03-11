@@ -27,6 +27,12 @@ from lerobot.common.datasets.lerobot_dataset import LEROBOT_HOME
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 import tensorflow as tf
 import tyro
+print(tf.executing_eagerly())
+# Assuming 'sparse_tensor' is your SparseTensor object
+dense_tensor = tf.sparse.to_dense(sparse_tensor)
+
+# If in eager execution mode, convert to NumPy array
+numpy_array = dense_tensor.numpy()
 
 REPO_NAME = "cognitive_drone"  # Name of the output dataset, also used for the Hugging Face Hub
 
@@ -213,7 +219,7 @@ def main(data_dir: str, *, push_to_hub: bool = False):
             for example_idx, serialized_example in enumerate(file_dataset):
                 example_proto = tf.train.Example()
                 example_proto.ParseFromString(serialized_example.numpy())
-                print("Raw steps/action:", example_proto.features.feature["steps/action"])
+                #print("Raw steps/action:", example_proto.features.feature["steps/action"])
                 try:
                     # Parse example
                     example = parse_example(serialized_example)
