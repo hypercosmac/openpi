@@ -123,7 +123,7 @@ def parse_example(serialized_record):
             'steps/reward': tf.io.VarLenFeature(tf.float32),
             # Expect action to be a list of floats
             'steps/action': tf.io.VarLenFeature(tf.float32),
-            'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=b''),
+            'steps/observation/state': tf.io.VarLenFeature(tf.float32),
             'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             'steps/language_instruction': tf.io.VarLenFeature(tf.string)
         }
