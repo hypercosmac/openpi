@@ -136,10 +136,11 @@ def parse_example(serialized_record):
         
         # Convert sparse tensor to dense for language instruction if present
         if isinstance(example['steps/language_instruction'], tf.sparse.SparseTensor):
-            example['steps/language_instruction'] = tf.sparse.to_dense(
-                example['steps/language_instruction'], default_value=b''
-            )[0]  # Take first value if multiple exist
-        
+            dense_instruction = tf.sparse.to_dense(example['steps/language_instruction'], default_value=b'')
+            instruction = dense_instruction[0].numpy().decode('utf-8')  # Get the first element
+        else:
+            instruction = example['steps/language_instruction'].numpy().decode('utf-8') if example['steps/language_instruction'] else b''
+
         # Add the action tensor back to the example
         example['steps/action'] = action
         
