@@ -119,10 +119,9 @@ def parse_example(serialized_record):
         feature_description = {
             'steps/is_first': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/is_last': tf.io.VarLenFeature(tf.int64),
-            #'steps/is_last': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/is_terminal': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
-            'steps/action': tf.io.FixedLenFeature([1], tf.string, default_value=b''),
+            'steps/action': tf.io.FixedLenFeature([4], tf.float32, default_value=[0.0, 0.0, 0.0, 0.0]),
             'steps/observation/state': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             'steps/observation/image': tf.io.FixedLenFeature([], tf.string, default_value=b''),
             # Make language instruction optional using VarLenFeature
