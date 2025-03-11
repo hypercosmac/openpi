@@ -118,7 +118,7 @@ def parse_example(serialized_record):
         # Define required features with proper bytes literals for string defaults
         feature_description = {
             'steps/is_first': tf.io.FixedLenFeature([], tf.int64, default_value=0),
-            'steps/is_last': tf.io.VarLenFeature(tf.int64, default_value=0),
+            'steps/is_last': tf.io.VarLenFeature(tf.int64),
             #'steps/is_last': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/is_terminal': tf.io.FixedLenFeature([], tf.int64, default_value=0),
             'steps/reward': tf.io.FixedLenFeature([], tf.float32, default_value=0.0),
